@@ -782,6 +782,11 @@ trait MongoDBSystem extends Actor {
   // any other response
   private val fallback: Receive = {
     case response: Response if RequestId.common accepts response => {
+      val ns = _nodeSet
+      ns.pickByChannelId(response.info._channelId).foreach {
+        case (_, connection) =>
+          connection.release()
+      }
       awaitingResponses.get(response.header.responseTo) match {
         case Some(AwaitingResponse(_, _, promise, isGetLastError, isMongo26WriteOp)) => {
           trace(s"Got a response from ${response.info._channelId} to ${response.header.responseTo}! Will give back message=$response to promise ${System.identityHashCode(promise)}")
@@ -1201,6 +1206,13 @@ trait MongoDBSystem extends Actor {
     }
   }
 
+  private def exlusive(request: Request): Boolean = {
+    options.lockChannels && (request.op match {
+      case q: Query => true
+      case _        => false
+    })
+  }
+
   private def pickChannel(request: Request): Try[(Node, Connection)] = {
     val ns = _nodeSet
 
@@ -1208,7 +1220,7 @@ trait MongoDBSystem extends Actor {
       case Some(chanId) => ns.pickByChannelId(chanId).map(Success(_)).getOrElse(
         Failure(new ChannelNotFound(s"#chanId", false, internalState)))
 
-      case _ => ns.pick(request.readPreference).map(Success(_)).getOrElse {
+      case _ => ns.pick(request.readPreference, exlusive(request)).map(Success(_)).getOrElse {
         val secOk = secondaryOK(request)
         lazy val reqAuth = ns.authenticates.nonEmpty
         val cause: Throwable = if (!secOk) {

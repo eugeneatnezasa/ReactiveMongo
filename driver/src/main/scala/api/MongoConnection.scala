@@ -613,6 +613,9 @@ object MongoConnection {
           case ("rm.nbChannelsPerNode", v) => unsupported -> result.
             copy(nbChannelsPerNode = v.toInt)
 
+          case ("rm.lockChannels", v) => unsupported -> result.
+            copy(lockChannels = v.toBoolean)
+
           case ("writeConcern", "unacknowledged") => unsupported -> result.
             copy(writeConcern = WriteConcern.Unacknowledged)
 

@@ -47,6 +47,7 @@ case class MongoConnectionOptions(
   tcpNoDelay: Boolean = false,
   keepAlive: Boolean = false,
   nbChannelsPerNode: Int = 10,
+  lockChannels: Boolean = false,
 
   // read and write preferences
   writeConcern: WriteConcern = WriteConcern.Default,

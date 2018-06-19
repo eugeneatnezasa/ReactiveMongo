@@ -96,13 +96,14 @@ case class NodeSet(
     case (node, Some(connection)) => node -> connection
   }
 
-  private val pickConnectionAndFlatten: Option[Node] => Option[(Node, Connection)] = {
-    val p: RoundRobiner[Connection, Vector] => Option[Connection] =
-      if (authenticates.isEmpty) _.pick
-      else _.pickWithFilter(c =>
-        !c.authenticating.isDefined && !c.authenticated.isEmpty)
+  private val pickConnectionAndFlatten: (Option[Node], Boolean) => Option[(Node, Connection)] = {
+    val p: (RoundRobiner[Connection, Vector], Boolean) => Option[Connection] = (rr, exclusive) =>
+      if (authenticates.isEmpty) {
+        rr.pickWithFilter(c => !exclusive || c.tryLock())
+      } else rr.pickWithFilter(c =>
+        c.authenticating.isEmpty && c.authenticated.nonEmpty && (!exclusive || c.tryLock()))
 
-    _.flatMap(node => p(node.authenticatedConnections).map(node -> _))
+    (optNode, exclusive) => optNode.flatMap(node => p(node.authenticatedConnections, exclusive).map(node -> _))
   }
 
   private def pickFromGroupWithFilter(roundRobiner: RoundRobiner[Node, Vector], filter: Option[BSONDocument => Boolean], fallback: => Option[Node]) =
@@ -110,30 +111,30 @@ case class NodeSet(
       roundRobiner.pickWithFilter(_.tags.fold(false)(f)))
 
   // http://docs.mongodb.org/manual/reference/read-preference/
-  def pick(preference: ReadPreference): Option[(Node, Connection)] = {
+  def pick(preference: ReadPreference, exclusive: Boolean): Option[(Node, Connection)] = {
     def filter(tags: Seq[Map[String, String]]) = ReadPreference.TagFilter(tags)
 
     if (mongos.isDefined) {
-      pickConnectionAndFlatten(mongos)
+      pickConnectionAndFlatten(mongos, exclusive)
     } else preference match {
       case ReadPreference.Primary =>
-        pickConnectionAndFlatten(primary)
+        pickConnectionAndFlatten(primary, exclusive)
 
       case ReadPreference.PrimaryPreferred(tags) =>
         pickConnectionAndFlatten(primary.orElse(
-          pickFromGroupWithFilter(secondaries, filter(tags), secondaries.pick)))
+          pickFromGroupWithFilter(secondaries, filter(tags), secondaries.pick)), exclusive)
 
       case ReadPreference.Secondary(tags) =>
         pickConnectionAndFlatten(pickFromGroupWithFilter(
-          secondaries, filter(tags), secondaries.pick))
+          secondaries, filter(tags), secondaries.pick), exclusive)
 
       case ReadPreference.SecondaryPreferred(tags) =>
         pickConnectionAndFlatten(pickFromGroupWithFilter(
-          secondaries, filter(tags), secondaries.pick).orElse(primary))
+          secondaries, filter(tags), secondaries.pick).orElse(primary), exclusive)
 
       case ReadPreference.Nearest(tags) =>
         pickConnectionAndFlatten(pickFromGroupWithFilter(
-          nearestGroup, filter(tags), nearest))
+          nearestGroup, filter(tags), nearest), exclusive)
     }
   }
 
